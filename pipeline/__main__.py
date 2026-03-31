@@ -47,7 +47,16 @@ async def cmd_run(args, config: PipelineConfig) -> None:
 
     session = aiohttp.ClientSession()
     cost_tracker = CostTracker(config.max_cost)
-    run_id = config.run_id or f"run_{int(time.time())}"
+    base_run_id = config.run_id or f"run_{int(time.time())}"
+    # In split mode (producer-only or consumer-only), tag the run_id with the
+    # worker role so both processes write to separate stats rows and don't
+    # overwrite each other on the shared database.
+    if config.producer_only:
+        run_id = f"{base_run_id}-producer"
+    elif config.consumer_only:
+        run_id = f"{base_run_id}-consumer"
+    else:
+        run_id = base_run_id
 
     tasks: list[asyncio.Task] = []
 

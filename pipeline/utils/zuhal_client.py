@@ -108,16 +108,18 @@ class ZuhalClient:
         if is_disposable:
             verdict = "disposable"
 
-        score = 0.0
-        try:
-            score = float(inner.get("score", "0.0"))
-        except (ValueError, TypeError):
-            pass
+        # Log remaining credits so operator can track balance
+        remaining = inner.get("remaining_credits")
+        if remaining is not None:
+            if remaining < 1000:
+                logger.warning("Zuhal credits low: %d remaining", remaining)
+            else:
+                logger.debug("Zuhal credits remaining: %d", remaining)
 
         return ValidationResult(
             email=email,
             verdict=verdict,
-            score=score,
+            score=0.0,
             is_disposable=is_disposable,
             raw_status=data.get("status", ""),
             http_status=status,
