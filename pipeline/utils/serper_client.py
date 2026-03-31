@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Literal
@@ -8,8 +9,10 @@ from urllib.parse import urlparse
 import aiohttp
 from fuzzywuzzy import fuzz
 
+from pipeline.constants import SERVICE_BACKOFF
 from pipeline.models import EnrichmentResult, PipelineHaltError
-from pipeline.utils.backoff import SERVICE_BACKOFF, with_backoff
+from pipeline.utils.backoff import with_backoff
+from pipeline.utils.rate_limiter import TokenBucket
 
 logger = logging.getLogger("pipeline.producer")
 
@@ -21,6 +24,7 @@ class SerperClient:
         self,
         api_key: str,
         session: aiohttp.ClientSession,
+        rate_limiter: TokenBucket,
         *,
         dry_run: bool = False,
         max_attempts: int = 3,
@@ -28,6 +32,7 @@ class SerperClient:
     ) -> None:
         self.api_key = api_key
         self.session = session
+        self.rate_limiter = rate_limiter
         self.dry_run = dry_run
         self.max_attempts = max_attempts
         self.jitter = jitter
@@ -51,6 +56,8 @@ class SerperClient:
                 query_used=f"[dry-run] {query}",
                 raw_snippets=["[dry-run stub snippet]"],
             )
+
+        await self.rate_limiter.acquire()
 
         data = await with_backoff(
             lambda: self._call_api(query),
@@ -93,14 +100,12 @@ class SerperClient:
         snippets: list[str] = []
         domain: str | None = None
 
-        # Extract emails from organic snippets
         for result in data.get("organic", []):
             snippet = result.get("snippet", "")
             if snippet:
                 snippets.append(snippet)
                 emails.extend(EMAIL_RE.findall(snippet))
 
-        # Deduplicate emails
         seen: set[str] = set()
         unique_emails: list[str] = []
         for e in emails:
@@ -109,13 +114,11 @@ class SerperClient:
                 seen.add(lower)
                 unique_emails.append(lower)
 
-        # Extract domain from knowledgeGraph first
         kg = data.get("knowledgeGraph", {})
         if kg and kg.get("website"):
             parsed = urlparse(kg["website"])
             domain = parsed.netloc.lower().lstrip("www.")
 
-        # Fallback: highest-ranked organic link with fuzzy match
         if not domain:
             norm_biz = business_name.lower()
             for result in data.get("organic", []):
@@ -123,7 +126,6 @@ class SerperClient:
                 if not link:
                     continue
                 netloc = urlparse(link).netloc.lower().lstrip("www.")
-                # Strip TLD for fuzzy comparison
                 netloc_base = netloc.rsplit(".", 1)[0] if "." in netloc else netloc
                 if fuzz.ratio(norm_biz.replace(" ", ""), netloc_base) >= 80:
                     domain = netloc
@@ -163,8 +165,7 @@ class _RetryableHTTPError(Exception):
 
 def _is_retryable(exc: Exception) -> bool:
     if isinstance(exc, _RetryableHTTPError):
-        return exc.status in (429, 500, 503)
-    return isinstance(exc, (aiohttp.ClientError, asyncio.TimeoutError))
-
-
-import asyncio  # noqa: E402 (used in _is_retryable)
+        return True  # only 429, 500, 503 ever raise this
+    if isinstance(exc, aiohttp.ClientResponseError):
+        return False  # explicit HTTP errors are not transient
+    return isinstance(exc, (aiohttp.ClientConnectionError, asyncio.TimeoutError))

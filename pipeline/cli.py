@@ -69,8 +69,10 @@ def _add_run_flags(parser: argparse.ArgumentParser) -> None:
     # Rate limits
     parser.add_argument("--zuhal-rate-limit", type=int, default=200,
                         help="Zuhal calls/hour ceiling")
-    parser.add_argument("--serper-rate-limit", type=int, default=60,
-                        help="Serper calls/minute ceiling")
+    parser.add_argument("--serper-rate-limit", type=int, default=500,
+                        help="Serper calls/hour ceiling")
+    parser.add_argument("--brave-rate-limit", type=int, default=500,
+                        help="Brave calls/hour ceiling")
     parser.add_argument("--consumer-poll-interval", type=int, default=5,
                         help="Consumer poll interval (seconds)")
 

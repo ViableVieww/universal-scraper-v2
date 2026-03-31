@@ -7,6 +7,7 @@ import logging
 import aiosqlite
 
 from pipeline.config import PipelineConfig
+from pipeline.constants import CONSUMER_POLL_EMPTY_BACKOFF_THRESHOLD, CONSUMER_POLL_MAX_INTERVAL_SECONDS
 from pipeline.models import PipelineHaltError
 from pipeline.utils.cost_tracker import CostTracker
 from pipeline.utils.zuhal_client import ZuhalClient
@@ -32,38 +33,50 @@ class ConsumerWorker:
         self._sem = asyncio.Semaphore(config.zuhal_concurrency)
 
     async def run(self) -> None:
-        logger.info("Consumer starting (poll interval: %ds)", self.config.consumer_poll_interval)
-
+        base_interval = float(self.config.consumer_poll_interval)
+        poll_interval = base_interval
         consecutive_empty = 0
+
+        logger.info("Consumer starting (base poll interval: %.0fs)", base_interval)
 
         while not self.stop_event.is_set():
             rows = await db.fetch_pending_validation(self.conn, limit=10)
 
             if not rows:
+                # Adaptive backoff: double interval after threshold consecutive empties
+                consecutive_empty += 1
+                if consecutive_empty >= CONSUMER_POLL_EMPTY_BACKOFF_THRESHOLD:
+                    poll_interval = min(poll_interval * 2, CONSUMER_POLL_MAX_INTERVAL_SECONDS)
+
                 # Check if producer is done
                 producer_done = await db.get_checkpoint(self.conn, "producer_done")
                 if producer_done == "true":
                     # Double-check: any remaining pending rows?
                     final_check = await db.fetch_pending_validation(self.conn, limit=1)
                     if not final_check:
-                        consecutive_empty += 1
-                        if consecutive_empty >= 3:
+                        if consecutive_empty >= CONSUMER_POLL_EMPTY_BACKOFF_THRESHOLD:
                             logger.info("Consumer: queue drained and producer done — exiting")
                             break
                     else:
+                        # Rows appeared — reset backoff and process them
                         consecutive_empty = 0
+                        poll_interval = base_interval
                         continue
-                else:
-                    consecutive_empty = 0
 
-                await asyncio.sleep(self.config.consumer_poll_interval)
+                await asyncio.sleep(poll_interval)
                 continue
 
+            # Rows found — reset adaptive backoff
             consecutive_empty = 0
+            poll_interval = base_interval
 
             # Process batch concurrently
             tasks = [self._validate_record(row) for row in rows]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for res in results:
+                if isinstance(res, BaseException) and not isinstance(res, PipelineHaltError):
+                    logger.error("Unexpected error in validation task", exc_info=res)
 
         logger.info("Consumer finished")
 
@@ -84,7 +97,7 @@ class ConsumerWorker:
                 await db.update_record_status(self.conn, unique_id, "validation_failed")
                 return
 
-            # Mark as in-progress to prevent other consumers from picking it up
+            # Mark as in-progress to prevent duplicate picks on the next poll
             await db.update_record_status(self.conn, unique_id, "validating")
 
             for idx, email in enumerate(candidates):
@@ -92,7 +105,7 @@ class ConsumerWorker:
                     result = await self.zuhal.validate(email)
                     self.cost_tracker.record_call("zuhal")
                 except PipelineHaltError:
-                    # Restore status so it can be retried later
+                    # Restore status so it can be retried after the halt is resolved
                     await db.update_record_status(self.conn, unique_id, "pending_validation")
                     raise
                 except Exception as exc:
@@ -129,13 +142,12 @@ class ConsumerWorker:
                     continue
 
                 if result.verdict == "unknown":
-                    # Retry this specific candidate up to max_attempts
                     validated = await self._retry_unknown(unique_id, email, idx)
                     if validated:
                         return
                     continue
 
-            # All candidates exhausted
+            # All candidates exhausted without a valid verdict
             await db.update_record_status(
                 self.conn,
                 unique_id,
@@ -175,7 +187,6 @@ class ConsumerWorker:
             if result.verdict in ("invalid", "disposable"):
                 return False
 
-            # Still unknown — continue retrying
             logger.debug(
                 "Still unknown for %s (%s), retry %d/%d",
                 unique_id, email, retry, self.config.max_attempts - 1,

@@ -3,13 +3,9 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 
-logger = logging.getLogger("pipeline")
+from pipeline.constants import API_COSTS
 
-COSTS_PER_CALL: dict[str, float] = {
-    "serper": 0.001,
-    "brave": 0.001,
-    "zuhal": 0.0005,
-}
+logger = logging.getLogger("pipeline")
 
 
 class CostTracker:
@@ -19,7 +15,7 @@ class CostTracker:
         self._counts: dict[str, int] = defaultdict(int)
 
     def record_call(self, service: str) -> None:
-        cost = COSTS_PER_CALL.get(service, 0.0)
+        cost = API_COSTS.get(service, 0.0)
         self._totals[service] += cost
         self._counts[service] += 1
 

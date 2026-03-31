@@ -5,14 +5,9 @@ import random
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
-T = TypeVar("T")
+from pipeline.constants import SERVICE_BACKOFF  # noqa: F401 — re-exported for callers
 
-SERVICE_BACKOFF: dict[str, tuple[float, float]] = {
-    "dns": (0.5, 8.0),
-    "serper": (1.0, 32.0),
-    "brave": (1.0, 32.0),
-    "zuhal": (1.0, 64.0),
-}
+T = TypeVar("T")
 
 
 async def with_backoff(

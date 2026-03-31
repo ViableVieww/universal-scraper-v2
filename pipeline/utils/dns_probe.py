@@ -5,12 +5,11 @@ import logging
 
 import aiodns
 
-from pipeline.utils.backoff import SERVICE_BACKOFF, with_backoff
+from pipeline.constants import DNS_TLDS, SERVICE_BACKOFF
+from pipeline.utils.backoff import with_backoff
 from pipeline.utils.text import generate_domain_stems
 
 logger = logging.getLogger("pipeline.producer")
-
-TLDS = (".com", ".net", ".org")
 
 
 async def probe_domains(
@@ -41,7 +40,7 @@ async def probe_domains(
 
     async with semaphore:
         for stem in stems:
-            for tld in TLDS:
+            for tld in DNS_TLDS:
                 domain = f"{stem}{tld}"
                 try:
                     mx_host = await with_backoff(
