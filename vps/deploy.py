@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -140,8 +141,8 @@ def main() -> None:
 
         # ── Step 2: Pull code ──────────────────────────────────────────
         print("\nStep 2/5 — Pulling code")
-        repo_exists_rc, _, _ = ssh.exec(f"test -d {WORK_DIR}/.git && echo yes")
-        if "yes" in repo_exists_rc or ssh.remote_exists(f"{WORK_DIR}/.git"):
+        repo_exists_rc, _, _ = ssh.exec(f"test -d {WORK_DIR}/.git")
+        if repo_exists_rc == 0:
             _run(ssh, f"cd {WORK_DIR} && git pull origin main", label="git pull")
         else:
             _run(ssh,
@@ -198,15 +199,19 @@ def main() -> None:
             consumer_flags=consumer_extra,
         )
 
-        # Write units via heredoc
+        # Write units via SFTP (more reliable than heredoc over exec_command)
         for unit_name, content in [
             ("usx-producer.service", producer_unit),
             ("usx-consumer.service", consumer_unit),
         ]:
-            escaped = content.replace("'", "'\\''")
-            _run(ssh,
-                 f"cat > /etc/systemd/system/{unit_name} << 'UNITEOF'\n{content}\nUNITEOF",
-                 label=f"write {unit_name}")
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".service", delete=False) as tmp:
+                tmp.write(content)
+                tmp_path = Path(tmp.name)
+            try:
+                ssh.put(tmp_path, f"/etc/systemd/system/{unit_name}")
+                print(f"  [write {unit_name}] uploaded via SFTP")
+            finally:
+                tmp_path.unlink(missing_ok=True)
 
         _run(ssh, "systemctl daemon-reload", label="daemon-reload")
         _run(ssh,
