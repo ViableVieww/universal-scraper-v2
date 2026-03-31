@@ -93,12 +93,33 @@ async def cmd_run(args, config: PipelineConfig) -> None:
         stop_event.set()
         raise
     finally:
-        # Update stats
-        await db.upsert_stats(
-            conn, run_id,
-            estimated_cost_usd=cost_tracker.total_cost,
-            **{f"{k}_calls": v for k, v in cost_tracker.counts.items()},
-        )
+        # Gather record counts to populate all stats columns
+        status_counts: dict[str, int] = {}
+        async with conn.execute(
+            "SELECT status, COUNT(*) FROM records GROUP BY status"
+        ) as _cur:
+            async for _row in _cur:
+                status_counts[_row[0]] = _row[1]
+
+        total = sum(status_counts.values())
+        validated_n = status_counts.get("validated", 0)
+        failed_n = status_counts.get("validation_failed", 0)
+        disc_failed_n = status_counts.get("discovery_failed", 0)
+        disc_hits_n = max(total - disc_failed_n - status_counts.get("queued", 0), 0)
+
+        # Skip writing a stats row if nothing was processed (no phantom zero rows)
+        if total > 0 or cost_tracker.total_cost > 0:
+            await db.upsert_stats(
+                conn, run_id,
+                estimated_cost_usd=cost_tracker.total_cost,
+                total_input=total,
+                producer_processed=total,
+                discovery_hits=disc_hits_n,
+                discovery_misses=disc_failed_n,
+                validated=validated_n,
+                validation_failed=failed_n,
+                **{f"{k}_calls": v for k, v in cost_tracker.counts.items()},
+            )
 
         # Write output files
         await _write_outputs(conn, config)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Literal
 
+from pipeline.constants import MAX_WITHOUT_CANDIDATES
+
 
 # Ranked by empirical likelihood (most common corporate patterns first)
 def generate_personal_patterns(first: str, last: str, domain: str) -> list[str]:
@@ -72,10 +74,10 @@ def generate_ranked_candidates(
     """Generate top-N ranked email candidates based on strategy.
 
     For "with" (person-based): returns top max_candidates from 13 personal patterns.
-    For "without" (org-based): returns all 8 generic patterns (all are worth trying).
+    For "without" (org-based): returns top MAX_WITHOUT_CANDIDATES generic patterns.
     """
     if strategy == "with":
         patterns = generate_personal_patterns(first, last, domain)
         return patterns[:max_candidates]
     else:
-        return generate_generic_patterns(domain)
+        return generate_generic_patterns(domain)[:MAX_WITHOUT_CANDIDATES]
