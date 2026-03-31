@@ -126,12 +126,13 @@ def main() -> None:
     gh_token = env["GH_TOKEN"]
     gh_repo = env["GH_REPO"]
 
-    print(f"\n=== USX Deploy → {ip} ===\n")
+    print(f"\n=== USX Deploy -> {ip} ===\n")
 
     with SSHClient(ip, user, password) as ssh:
 
         # ── Step 1: Push secrets ───────────────────────────────────────
         print("Step 1/5 — Pushing secrets")
+        ssh.exec(f"mkdir -p {WORK_DIR}")
         ssh.put(Path(".env"), f"{WORK_DIR}/.env")
         print("  .env uploaded")
 
@@ -145,9 +146,15 @@ def main() -> None:
         if repo_exists_rc == 0:
             _run(ssh, f"cd {WORK_DIR} && git pull origin main", label="git pull")
         else:
+            # Directory may already exist (created by mkdir -p in step 1) but
+            # not be a git repo yet — use init + fetch + reset instead of clone
+            origin = f"https://{gh_token}@github.com/{gh_repo}.git"
             _run(ssh,
-                 f"git clone https://{gh_token}@github.com/{gh_repo}.git {WORK_DIR}",
-                 label="git clone")
+                 f"cd {WORK_DIR} && git init -b main && "
+                 f"git remote add origin {origin} && "
+                 f"git fetch origin main && "
+                 f"git reset --hard origin/main",
+                 label="git init+fetch")
 
         if args.provision:
             _run(ssh, f"mkdir -p {WORK_DIR}/records {WORK_DIR}/output {WORK_DIR}/logs",
