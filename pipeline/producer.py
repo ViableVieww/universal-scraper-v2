@@ -118,7 +118,7 @@ class ProducerWorker:
                 results = await self._process_chunk(chunk)
 
                 # Atomic write + checkpoint advance
-                new_offset = offset + config.chunk_size
+                new_offset = offset + len(chunk)
                 await db.insert_records_batch(self.conn, results, new_offset)
                 offset = new_offset
 

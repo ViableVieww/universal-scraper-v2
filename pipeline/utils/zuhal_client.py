@@ -101,7 +101,7 @@ class ZuhalClient:
             data = await resp.json()
 
         inner = data.get("data", {})
-        verdict = inner.get("status", "unknown")
+        verdict = inner.get("email_status", "unknown")
         is_disposable = inner.get("is_disposable", False)
 
         # Disposable override: treat as invalid regardless of verdict
