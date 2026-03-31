@@ -45,9 +45,10 @@ class PipelineConfig(BaseSettings):
     serper_concurrency: int = 10
     zuhal_concurrency: int = Field(default=3)
 
-    # --- Rate limits ---
+    # --- Rate limits (calls per hour) ---
     zuhal_rate_limit: int = 200
-    serper_rate_limit: int = 60
+    serper_rate_limit: int = 500
+    brave_rate_limit: int = 500
     consumer_poll_interval: int = 5
 
     # --- Backoff ---

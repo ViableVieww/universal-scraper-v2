@@ -9,8 +9,10 @@ from urllib.parse import urlparse
 import aiohttp
 from fuzzywuzzy import fuzz
 
+from pipeline.constants import SERVICE_BACKOFF
 from pipeline.models import EnrichmentResult, PipelineHaltError
-from pipeline.utils.backoff import SERVICE_BACKOFF, with_backoff
+from pipeline.utils.backoff import with_backoff
+from pipeline.utils.rate_limiter import TokenBucket
 
 logger = logging.getLogger("pipeline.producer")
 
@@ -22,6 +24,7 @@ class BraveClient:
         self,
         api_key: str,
         session: aiohttp.ClientSession,
+        rate_limiter: TokenBucket,
         *,
         dry_run: bool = False,
         max_attempts: int = 3,
@@ -29,6 +32,7 @@ class BraveClient:
     ) -> None:
         self.api_key = api_key
         self.session = session
+        self.rate_limiter = rate_limiter
         self.dry_run = dry_run
         self.max_attempts = max_attempts
         self.jitter = jitter
@@ -52,6 +56,8 @@ class BraveClient:
                 query_used=f"[dry-run] {query}",
                 raw_snippets=["[dry-run stub snippet]"],
             )
+
+        await self.rate_limiter.acquire()
 
         data = await with_backoff(
             lambda: self._call_api(query),
@@ -104,18 +110,15 @@ class BraveClient:
         web_results = data.get("web", {}).get("results", [])
 
         for result in web_results:
-            # Scan description
             desc = result.get("description", "")
             if desc:
                 snippets.append(desc)
                 emails.extend(EMAIL_RE.findall(desc))
 
-            # Scan extra_snippets
             for extra in result.get("extra_snippets", []):
                 snippets.append(extra)
                 emails.extend(EMAIL_RE.findall(extra))
 
-        # Deduplicate emails
         seen: set[str] = set()
         unique_emails: list[str] = []
         for e in emails:
@@ -124,7 +127,6 @@ class BraveClient:
                 seen.add(lower)
                 unique_emails.append(lower)
 
-        # Extract domain via fuzzy match on URL or profile.long_name
         norm_biz = business_name.lower()
         for result in web_results:
             url = result.get("url", "")
@@ -135,7 +137,6 @@ class BraveClient:
             if fuzz.ratio(norm_biz.replace(" ", ""), netloc_base) >= 80:
                 domain = netloc
                 break
-            # Check profile.long_name as fallback
             long_name = result.get("profile", {}).get("long_name", "")
             if long_name:
                 ln_base = long_name.lower().rsplit(".", 1)[0] if "." in long_name else long_name.lower()
@@ -177,5 +178,7 @@ class _RetryableHTTPError(Exception):
 
 def _is_retryable(exc: Exception) -> bool:
     if isinstance(exc, _RetryableHTTPError):
-        return exc.status in (429, 500, 503)
-    return isinstance(exc, (aiohttp.ClientError, asyncio.TimeoutError))
+        return True  # only 429, 500, 503 ever raise this
+    if isinstance(exc, aiohttp.ClientResponseError):
+        return False  # explicit HTTP errors are not transient
+    return isinstance(exc, (aiohttp.ClientConnectionError, asyncio.TimeoutError))

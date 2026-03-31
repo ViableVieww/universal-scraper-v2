@@ -13,6 +13,7 @@ from pipeline.models import InputRecord, PipelineHaltError
 from pipeline.utils.cost_tracker import CostTracker
 from pipeline.utils.dns_probe import probe_domains
 from pipeline.utils.email_patterns import generate_ranked_candidates
+from pipeline.utils.rate_limiter import TokenBucket
 from pipeline.utils.serper_client import SerperClient
 from pipeline.utils.brave_client import BraveClient
 from pipeline.utils.text import assign_email_strategy, is_org_agent, parse_name
@@ -39,14 +40,23 @@ class ProducerWorker:
         self._dns_sem = asyncio.Semaphore(config.dns_concurrency)
         self._serper_sem = asyncio.Semaphore(config.serper_concurrency)
 
+        _serper_bucket = TokenBucket(
+            capacity=config.serper_rate_limit,
+            refill_rate=config.serper_rate_limit / 3600,
+        )
+        _brave_bucket = TokenBucket(
+            capacity=config.brave_rate_limit,
+            refill_rate=config.brave_rate_limit / 3600,
+        )
+
         self._serper = SerperClient(
-            config.serper_api_key, session,
+            config.serper_api_key, session, _serper_bucket,
             dry_run=config.dry_run,
             max_attempts=config.max_attempts,
             jitter=config.backoff_jitter,
         )
         self._brave = BraveClient(
-            config.brave_api_key, session,
+            config.brave_api_key, session, _brave_bucket,
             dry_run=config.dry_run,
             max_attempts=config.max_attempts,
             jitter=config.backoff_jitter,

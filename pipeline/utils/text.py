@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Literal, TYPE_CHECKING
 
+from pipeline.constants import DOMAIN_STEM_MIN_LENGTH
+
 if TYPE_CHECKING:
     from pipeline.models import InputRecord
 
@@ -112,12 +114,15 @@ def generate_domain_stems(business_name: str) -> list[str]:
         if len(initials) >= 2:
             stems.append(initials)
 
-    # Deduplicate while preserving order
+    # Deduplicate while preserving order; filter invalid hostnames
     seen: set[str] = set()
     unique: list[str] = []
     for s in stems:
         s = re.sub(r"[^a-z0-9-]", "", s)
-        if s and s not in seen:
+        s = s.strip("-")                          # hyphens at edges are invalid in hostnames
+        if len(s) < DOMAIN_STEM_MIN_LENGTH:       # single chars are not real domains
+            continue
+        if s not in seen:
             seen.add(s)
             unique.append(s)
 
