@@ -71,7 +71,7 @@ class BraveClient:
             ),
         )
 
-        return self._extract(data, business_name, query)
+        return self._extract(data, business_name, query, domain_hint=domain_hint)
 
     async def _call_api(self, query: str) -> dict:
         headers = {
@@ -102,7 +102,13 @@ class BraveClient:
             resp.raise_for_status()
             return await resp.json()
 
-    def _extract(self, data: dict, business_name: str, query: str) -> EnrichmentResult:
+    def _extract(
+        self,
+        data: dict,
+        business_name: str,
+        query: str,
+        domain_hint: str | None = None,
+    ) -> EnrichmentResult:
         emails: list[str] = []
         snippets: list[str] = []
         domain: str | None = None
@@ -145,6 +151,11 @@ class BraveClient:
                 if fuzz.ratio(norm_biz.replace(" ", ""), ln_norm) >= 85:
                     domain = long_name.lower()
                     break
+
+        # Only keep emails that belong to the confirmed or hinted domain.
+        known_domain = domain or domain_hint
+        if known_domain:
+            unique_emails = [e for e in unique_emails if e.endswith(f"@{known_domain}")]
 
         return EnrichmentResult(
             candidate_emails=unique_emails,

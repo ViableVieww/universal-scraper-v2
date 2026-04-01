@@ -64,6 +64,7 @@ class PipelineConfig(BaseSettings):
     # --- Cost / safety ---
     max_cost: float | None = None
     dry_run: bool = False
+    max_consecutive_errors: int = Field(default=10, ge=1)
 
     # --- Enrichment ---
     enrichment_source: Literal["serper", "brave", "both"] = "serper"
