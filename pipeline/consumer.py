@@ -100,6 +100,8 @@ class ConsumerWorker:
             # Mark as in-progress to prevent duplicate picks on the next poll
             await db.update_record_status(self.conn, unique_id, "validating")
 
+            last_verdict: str | None = None
+
             for idx, email in enumerate(candidates):
                 try:
                     result = await self.zuhal.validate(email)
@@ -122,16 +124,18 @@ class ConsumerWorker:
                     )
                     continue
 
-                if result.verdict == "valid":
+                last_verdict = result.verdict
+
+                if result.verdict in ("valid", "accept-all"):
                     await db.update_record_status(
                         self.conn,
                         unique_id,
                         "validated",
                         candidate_email=email,
-                        zuhal_status="valid",
+                        zuhal_status=result.verdict,
                         zuhal_score=result.score,
                     )
-                    logger.info("Validated: %s -> %s (score %.2f)", unique_id, email, result.score)
+                    logger.info("Validated: %s -> %s (%s)", unique_id, email, result.verdict)
                     return
 
                 if result.verdict in ("invalid", "disposable"):
@@ -153,8 +157,9 @@ class ConsumerWorker:
                 unique_id,
                 "validation_failed",
                 validation_attempts=len(candidates),
+                zuhal_status=last_verdict,
             )
-            logger.debug("All candidates failed for %s", unique_id)
+            logger.debug("All candidates failed for %s (last verdict: %s)", unique_id, last_verdict)
 
     async def _retry_unknown(self, unique_id: str, email: str, attempt_base: int) -> bool:
         """Retry an 'unknown' verdict up to max_attempts. Returns True if validated."""
@@ -172,16 +177,16 @@ class ConsumerWorker:
                 )
                 continue
 
-            if result.verdict == "valid":
+            if result.verdict in ("valid", "accept-all"):
                 await db.update_record_status(
                     self.conn,
                     unique_id,
                     "validated",
                     candidate_email=email,
-                    zuhal_status="valid",
+                    zuhal_status=result.verdict,
                     zuhal_score=result.score,
                 )
-                logger.info("Validated on retry: %s -> %s", unique_id, email)
+                logger.info("Validated on retry: %s -> %s (%s)", unique_id, email, result.verdict)
                 return True
 
             if result.verdict in ("invalid", "disposable"):
