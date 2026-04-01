@@ -20,13 +20,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- status ---
     status_parser = subparsers.add_parser("status", help="Show pipeline status")
-    status_parser.add_argument("--db", default="pipeline.db", help="Database path")
+    status_parser.add_argument("--db", default="bucket/pipeline.db", help="Database path")
     status_parser.add_argument("--watch", type=int, default=None, metavar="N",
                                help="Refresh every N seconds")
 
     # --- reset ---
     reset_parser = subparsers.add_parser("reset", help="Re-queue failed records")
-    reset_parser.add_argument("--db", default="pipeline.db", help="Database path")
+    reset_parser.add_argument("--db", default="bucket/pipeline.db", help="Database path")
     reset_parser.add_argument("--status", default="discovery_failed",
                               choices=["discovery_failed", "validation_failed"],
                               help="Which status to re-queue")
@@ -42,9 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_run_flags(parser: argparse.ArgumentParser) -> None:
     # I/O
     parser.add_argument("-i", "--input", dest="input_path", help="Input JSONL file path")
-    parser.add_argument("-o", "--output-dir", default="output", help="Output directory")
-    parser.add_argument("--db", default="pipeline.db", help="SQLite database path")
-    parser.add_argument("--log-dir", default="logs", help="Log directory")
+    parser.add_argument("--name", default=None,
+                        help="Run name — outputs go to bucket/<name>/. Omit to use bucket/ directly (overwrites).")
+    parser.add_argument("-o", "--output-dir", default=None, help="Override output directory")
+    parser.add_argument("--db", default=None, help="Override SQLite database path")
+    parser.add_argument("--log-dir", default=None, help="Override log directory")
 
     # Scope
     parser.add_argument("--limit", type=int, default=None, help="Max records to process")

@@ -155,6 +155,38 @@ async def fetch_pending_validation(
         return await cursor.fetchall()
 
 
+async def fetch_pending_discovery(
+    conn: aiosqlite.Connection,
+    limit: int = 100,
+) -> list[aiosqlite.Row]:
+    async with conn.execute(
+        "SELECT * FROM records WHERE status = 'pending_discovery' LIMIT ?",
+        (limit,),
+    ) as cursor:
+        return await cursor.fetchall()
+
+
+async def update_record_discovery(conn: aiosqlite.Connection, result: dict) -> None:
+    """UPDATE discovery fields on an existing record (used by the retry loop)."""
+    await conn.execute(
+        """UPDATE records SET
+               status = ?, candidate_email = ?, candidate_emails = ?,
+               candidate_domain = ?, discovery_source = ?, discovery_attempts = ?,
+               updated_at = datetime('now')
+           WHERE unique_id = ?""",
+        (
+            result.get("status", "pending_discovery"),
+            result.get("candidate_email"),
+            result.get("candidate_emails"),
+            result.get("candidate_domain"),
+            result.get("discovery_source"),
+            result.get("discovery_attempts", 1),
+            result["unique_id"],
+        ),
+    )
+    await conn.commit()
+
+
 async def update_record_status(
     conn: aiosqlite.Connection,
     unique_id: str,

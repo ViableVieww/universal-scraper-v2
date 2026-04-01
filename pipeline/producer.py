@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import Counter
 from pathlib import Path
 
 import aiohttp
@@ -20,6 +21,13 @@ from pipeline.utils.text import assign_email_strategy, is_org_agent, parse_name
 from pipeline import db
 
 logger = logging.getLogger("pipeline.producer")
+
+
+def _is_transient_enrichment_error(exc: Exception) -> bool:
+    if isinstance(exc, (asyncio.TimeoutError, aiohttp.ClientConnectionError)):
+        return True
+    msg = str(exc)
+    return any(code in msg for code in ("HTTP 429", "HTTP 500", "HTTP 503"))
 
 
 class ProducerWorker:
@@ -138,12 +146,59 @@ class ProducerWorker:
                     logger.info("Producer limit reached (%d/%d records)", total_processed, config.limit)
                     break
 
+        if not self.stop_event.is_set() and self.config.max_discovery_retries > 0:
+            await self._run_discovery_retries()
+
         await db.upsert_checkpoint(self.conn, "producer_done", "true")
         logger.info("Producer finished. Total processed: %d", total_processed)
 
+    async def _run_discovery_retries(self) -> None:
+        for attempt in range(1, self.config.max_discovery_retries + 1):
+            rows = await db.fetch_pending_discovery(self.conn, limit=self.config.chunk_size)
+            if not rows:
+                logger.info("Discovery retry %d: nothing pending — done", attempt)
+                break
+
+            logger.info(
+                "Discovery retry %d/%d: %d records",
+                attempt, self.config.max_discovery_retries, len(rows),
+            )
+
+            attempts_by_id = {row["unique_id"]: (row["discovery_attempts"] or 1) for row in rows}
+
+            records = [
+                InputRecord(
+                    unique_id=row["unique_id"],
+                    business_name=row["business_name"] or "",
+                    agent_name=row["agent_name"] or "",
+                    state=row["state"] or "",
+                    jurisdiction=row["jurisdiction"] or "",
+                    position_type=row["position_type"] or "",
+                    name_entity_type=row["name_entity_type"] or "",
+                )
+                for row in rows
+            ]
+
+            results = await asyncio.gather(*[self._process_record(r) for r in records])
+
+            for result in results:
+                result["discovery_attempts"] = attempts_by_id.get(result["unique_id"], 1) + 1
+                await db.update_record_discovery(self.conn, result)
+
+            if self.cost_tracker.ceiling_reached():
+                break
+
     async def _process_chunk(self, chunk: list[InputRecord]) -> list[dict]:
         tasks = [self._process_record(record) for record in chunk]
-        return await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks)
+        counts = Counter(r["status"] for r in results)
+        logger.info(
+            "Chunk buckets — pv:%d pd:%d df:%d",
+            counts.get("pending_validation", 0),
+            counts.get("pending_discovery", 0),
+            counts.get("discovery_failed", 0),
+        )
+        return results
 
     async def _process_record(self, record: InputRecord) -> dict:
         config = self.config
@@ -176,6 +231,8 @@ class ProducerWorker:
         )
 
         candidate_emails: list[str] = []
+        had_transient_error = False
+        transient_error_source = ""
 
         # Parse name once for both pattern generation and search queries
         first, _, last = parse_name(record.agent_name)
@@ -213,7 +270,12 @@ class ProducerWorker:
             except PipelineHaltError:
                 raise
             except Exception as exc:
-                logger.debug("Serper failed for %s: %s", record.unique_id, exc)
+                if _is_transient_enrichment_error(exc):
+                    had_transient_error = True
+                    transient_error_source = "serper"
+                    logger.warning("Serper transient error for %s: %s", record.unique_id, exc)
+                else:
+                    logger.warning("Serper error for %s: %s", record.unique_id, exc)
 
         # Brave fallback
         if (
@@ -240,7 +302,12 @@ class ProducerWorker:
             except PipelineHaltError:
                 raise
             except Exception as exc:
-                logger.debug("Brave failed for %s: %s", record.unique_id, exc)
+                if _is_transient_enrichment_error(exc):
+                    had_transient_error = True
+                    transient_error_source = "brave"
+                    logger.warning("Brave transient error for %s: %s", record.unique_id, exc)
+                else:
+                    logger.warning("Brave error for %s: %s", record.unique_id, exc)
 
         # If enrichment found a domain but DNS didn't, generate patterns from it
         if not domain and enrichment_domain:
@@ -260,14 +327,29 @@ class ProducerWorker:
         # Cap at reasonable limit
         all_candidates = all_candidates[:10]
 
+        effective_domain = domain or enrichment_domain
+        result["discovery_attempts"] = 1
+
         if all_candidates:
             result["candidate_emails"] = json.dumps(all_candidates)
             result["candidate_email"] = all_candidates[0]
             result["status"] = "pending_validation"
-            result["discovery_attempts"] = 1
+            logger.info(
+                "BUCKET pv | %s | domain=%s emails=%d",
+                record.unique_id, effective_domain, len(all_candidates),
+            )
+        elif had_transient_error and not effective_domain:
+            result["status"] = "pending_discovery"
+            logger.warning(
+                "BUCKET pd | %s | transient=%s",
+                record.unique_id, transient_error_source,
+            )
         else:
             result["status"] = "discovery_failed"
-            result["discovery_attempts"] = 1
+            logger.info(
+                "BUCKET df | %s | domain=%s",
+                record.unique_id, effective_domain,
+            )
 
         return result
 
