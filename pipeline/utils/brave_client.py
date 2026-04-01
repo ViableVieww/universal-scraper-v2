@@ -134,13 +134,15 @@ class BraveClient:
                 continue
             netloc = urlparse(url).netloc.lower().lstrip("www.")
             netloc_base = netloc.rsplit(".", 1)[0] if "." in netloc else netloc
-            if fuzz.ratio(norm_biz.replace(" ", ""), netloc_base) >= 80:
+            netloc_norm = netloc_base.replace("-", "")
+            if fuzz.ratio(norm_biz.replace(" ", ""), netloc_norm) >= 85:
                 domain = netloc
                 break
             long_name = result.get("profile", {}).get("long_name", "")
             if long_name:
                 ln_base = long_name.lower().rsplit(".", 1)[0] if "." in long_name else long_name.lower()
-                if fuzz.ratio(norm_biz.replace(" ", ""), ln_base) >= 80:
+                ln_norm = ln_base.replace("-", "")
+                if fuzz.ratio(norm_biz.replace(" ", ""), ln_norm) >= 85:
                     domain = long_name.lower()
                     break
 

@@ -146,9 +146,10 @@ class ConsumerWorker:
                     continue
 
                 if result.verdict == "unknown":
-                    validated = await self._retry_unknown(unique_id, email, idx)
-                    if validated:
-                        return
+                    if row["strategy"] == "with":
+                        validated = await self._retry_unknown(unique_id, email, idx)
+                        if validated:
+                            return
                     continue
 
             # All candidates exhausted without a valid verdict

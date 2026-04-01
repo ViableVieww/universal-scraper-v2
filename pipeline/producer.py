@@ -177,12 +177,15 @@ class ProducerWorker:
 
         candidate_emails: list[str] = []
 
+        # Parse name once for both pattern generation and search queries
+        first, _, last = parse_name(record.agent_name)
+        parsed_agent = f"{first} {last}".strip() if first and last else record.agent_name
+
         if domain:
             result["candidate_domain"] = domain
             result["discovery_source"] = "dns"
 
             # Generate ranked patterns from domain
-            first, _, last = parse_name(record.agent_name)
             patterns = generate_ranked_candidates(first, last, domain, strategy)
             candidate_emails.extend(patterns)
 
@@ -195,7 +198,7 @@ class ProducerWorker:
                 async with self._serper_sem:
                     serper_result = await self._serper.enrich(
                         record.business_name,
-                        record.agent_name if strategy == "with" else None,
+                        parsed_agent if strategy == "with" else None,
                         record.state,
                         domain,
                         strategy,
@@ -222,7 +225,7 @@ class ProducerWorker:
                 async with self._serper_sem:
                     brave_result = await self._brave.enrich(
                         record.business_name,
-                        record.agent_name if strategy == "with" else None,
+                        parsed_agent if strategy == "with" else None,
                         record.state,
                         domain or enrichment_domain,
                         strategy,
@@ -242,7 +245,6 @@ class ProducerWorker:
         # If enrichment found a domain but DNS didn't, generate patterns from it
         if not domain and enrichment_domain:
             result["candidate_domain"] = enrichment_domain
-            first, _, last = parse_name(record.agent_name)
             patterns = generate_ranked_candidates(first, last, enrichment_domain, strategy)
             candidate_emails.extend(patterns)
 

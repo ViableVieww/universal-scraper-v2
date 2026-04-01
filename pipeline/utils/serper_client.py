@@ -71,7 +71,37 @@ class SerperClient:
             ),
         )
 
-        return self._extract(data, business_name, query)
+        result = self._extract(data, business_name, query)
+
+        # Fallback: if site:-scoped query returned no emails, retry without site: filter
+        if domain_hint and not result.candidate_emails and "site:" in query:
+            fallback_query = self._build_query(
+                business_name, agent_name, state, None, strategy
+            )
+            logger.debug("Serper site: miss for %s — retrying without site: filter", domain_hint)
+            await self.rate_limiter.acquire()
+            data2 = await with_backoff(
+                lambda: self._call_api(fallback_query),
+                max_attempts=self.max_attempts,
+                base_delay=self._base,
+                max_delay=self._max_delay,
+                jitter=self.jitter,
+                retryable=_is_retryable,
+                on_retry=lambda attempt, exc, delay: logger.debug(
+                    "Serper fallback retry %d: %s (wait %.1fs)", attempt, exc, delay,
+                ),
+            )
+            fallback = self._extract(data2, business_name, fallback_query)
+            if fallback.candidate_emails:
+                result = EnrichmentResult(
+                    candidate_emails=fallback.candidate_emails,
+                    candidate_domain=result.candidate_domain or fallback.candidate_domain,
+                    source="serper",
+                    query_used=fallback_query,
+                    raw_snippets=fallback.raw_snippets,
+                )
+
+        return result
 
     async def _call_api(self, query: str) -> dict:
         headers = {
@@ -127,7 +157,8 @@ class SerperClient:
                     continue
                 netloc = urlparse(link).netloc.lower().lstrip("www.")
                 netloc_base = netloc.rsplit(".", 1)[0] if "." in netloc else netloc
-                if fuzz.ratio(norm_biz.replace(" ", ""), netloc_base) >= 80:
+                netloc_norm = netloc_base.replace("-", "")
+                if fuzz.ratio(norm_biz.replace(" ", ""), netloc_norm) >= 85:
                     domain = netloc
                     break
 
