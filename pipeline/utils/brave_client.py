@@ -152,13 +152,23 @@ class BraveClient:
                     domain = long_name.lower()
                     break
 
-        # Only keep emails that belong to the confirmed or hinted domain.
+        # Split emails into confirmed-domain and subdomain buckets.
+        # Unrelated domains are discarded entirely.
         known_domain = domain or domain_hint
+        subdomain_emails: list[str] = []
         if known_domain:
-            unique_emails = [e for e in unique_emails if e.endswith(f"@{known_domain}")]
+            filtered: list[str] = []
+            for e in unique_emails:
+                host = e.split("@")[1] if "@" in e else ""
+                if e.endswith(f"@{known_domain}"):
+                    filtered.append(e)
+                elif host.endswith(f".{known_domain}"):
+                    subdomain_emails.append(e)
+            unique_emails = filtered
 
         return EnrichmentResult(
             candidate_emails=unique_emails,
+            subdomain_emails=subdomain_emails,
             candidate_domain=domain,
             source="brave",
             query_used=query,
