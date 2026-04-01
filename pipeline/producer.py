@@ -46,7 +46,7 @@ class ProducerWorker:
         self.stop_event = stop_event or asyncio.Event()
 
         self._dns_sem = asyncio.Semaphore(config.dns_concurrency)
-        self._serper_sem = asyncio.Semaphore(config.serper_concurrency)
+        self._enrichment_sem = asyncio.Semaphore(config.serper_concurrency)
 
         _serper_bucket = TokenBucket(
             capacity=config.serper_rate_limit,
@@ -252,7 +252,7 @@ class ProducerWorker:
 
         if config.enrichment_source in ("serper", "both"):
             try:
-                async with self._serper_sem:
+                async with self._enrichment_sem:
                     serper_result = await self._serper.enrich(
                         record.business_name,
                         parsed_agent if strategy == "with" else None,
@@ -284,7 +284,7 @@ class ProducerWorker:
             and config.enrichment_source in ("brave", "both")
         ):
             try:
-                async with self._serper_sem:
+                async with self._enrichment_sem:
                     brave_result = await self._brave.enrich(
                         record.business_name,
                         parsed_agent if strategy == "with" else None,
