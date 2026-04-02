@@ -21,7 +21,7 @@ SERVICE_BACKOFF: dict[str, tuple[float, float]] = {
 
 # --- DNS ---
 DNS_TLDS: tuple[str, ...] = (".com", ".net", ".org")
-DOMAIN_STEM_MIN_LENGTH: int = 2  # single-letter stems are not real domains
+DOMAIN_STEM_MIN_LENGTH: int = 5  # short stems (e.g. "php", "nsg") match unrelated registered domains
 MAX_WITHOUT_CANDIDATES: int = 3  # generic org patterns to try per record
 
 # --- Zuhal circuit breaker ---

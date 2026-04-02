@@ -104,10 +104,6 @@ def generate_domain_stems(business_name: str) -> list[str]:
     if len(words) > 1:
         stems.append("-".join(words))
 
-    # First word only: "acme"
-    if len(words) > 1 and words[0] not in GEOGRAPHIC_TERMS:
-        stems.append(words[0])
-
     # Initials for 3+ words: "abc"
     if len(words) >= 3:
         initials = "".join(w[0] for w in words if w)
@@ -131,6 +127,10 @@ def generate_domain_stems(business_name: str) -> list[str]:
 
 def assign_email_strategy(record: InputRecord) -> Literal["with", "without"]:
     """Determine whether a record should use person-based or org-based email strategy."""
+    # Registered agents are not business principals — search by business name only
+    if record.position_type.lower() in ("agent", "registered agent"):
+        return "without"
+
     if is_org_agent(record):
         return "without"
 

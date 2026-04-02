@@ -31,6 +31,7 @@ class ConsumerWorker:
         self.zuhal = zuhal
         self.stop_event = stop_event or asyncio.Event()
         self._sem = asyncio.Semaphore(config.zuhal_concurrency)
+        self._consecutive_api_errors: int = 0
 
     async def run(self) -> None:
         base_interval = float(self.config.consumer_poll_interval)
@@ -122,8 +123,17 @@ class ConsumerWorker:
                         type(exc).__name__,
                         str(exc),
                     )
+                    self._consecutive_api_errors += 1
+                    if self._consecutive_api_errors >= self.config.max_consecutive_errors:
+                        raise PipelineHaltError(
+                            f"Zuhal returning consistent errors — "
+                            f"{self._consecutive_api_errors} consecutive failures. "
+                            "Halting pipeline."
+                        )
                     continue
 
+                # Successful API response — reset the error streak
+                self._consecutive_api_errors = 0
                 last_verdict = result.verdict
 
                 if result.verdict in ("valid", "accept-all"):
@@ -138,19 +148,12 @@ class ConsumerWorker:
                     logger.info("Validated: %s -> %s (%s)", unique_id, email, result.verdict)
                     return
 
-                if result.verdict in ("invalid", "disposable"):
-                    logger.debug(
-                        "Candidate %s for %s: %s — trying next",
-                        email, unique_id, result.verdict,
-                    )
-                    continue
-
-                if result.verdict == "unknown":
-                    if row["strategy"] == "with":
-                        validated = await self._retry_unknown(unique_id, email, idx)
-                        if validated:
-                            return
-                    continue
+                # unknown/invalid/disposable — move to next candidate, no retry
+                logger.debug(
+                    "Candidate %s for %s: %s — trying next",
+                    email, unique_id, result.verdict,
+                )
+                continue
 
             # All candidates exhausted without a valid verdict
             await db.update_record_status(
@@ -162,40 +165,3 @@ class ConsumerWorker:
             )
             logger.debug("All candidates failed for %s (last verdict: %s)", unique_id, last_verdict)
 
-    async def _retry_unknown(self, unique_id: str, email: str, attempt_base: int) -> bool:
-        """Retry an 'unknown' verdict up to max_attempts. Returns True if validated."""
-        for retry in range(1, self.config.max_attempts):
-            try:
-                result = await self.zuhal.validate(email)
-                self.cost_tracker.record_call("zuhal")
-            except PipelineHaltError:
-                raise
-            except Exception as exc:
-                await db.insert_failure(
-                    self.conn, unique_id, "zuhal",
-                    attempt_base + retry + 1,
-                    type(exc).__name__, str(exc),
-                )
-                continue
-
-            if result.verdict in ("valid", "accept-all"):
-                await db.update_record_status(
-                    self.conn,
-                    unique_id,
-                    "validated",
-                    candidate_email=email,
-                    zuhal_status=result.verdict,
-                    zuhal_score=result.score,
-                )
-                logger.info("Validated on retry: %s -> %s (%s)", unique_id, email, result.verdict)
-                return True
-
-            if result.verdict in ("invalid", "disposable"):
-                return False
-
-            logger.debug(
-                "Still unknown for %s (%s), retry %d/%d",
-                unique_id, email, retry, self.config.max_attempts - 1,
-            )
-
-        return False

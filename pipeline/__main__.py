@@ -258,7 +258,7 @@ async def main() -> None:
     # Build PipelineConfig from args
     config_kwargs: dict = {}
     for field_name in [
-        "input_path", "output_dir", "db_path", "log_dir",
+        "input_path",
         "limit", "start_offset", "ignore_checkpoint", "chunk_size",
         "producer_only", "consumer_only", "strategy",
         "dns_concurrency", "serper_concurrency", "zuhal_concurrency",
@@ -271,9 +271,12 @@ async def main() -> None:
         if val is not None:
             config_kwargs[field_name] = val
 
-    # Map --db to db_path, --output-dir to output_dir
-    if hasattr(args, "db") and args.db:
-        config_kwargs["db_path"] = args.db
+    # Resolve output paths: bucket/<name>/ if --name given, else bucket/ (overwrites)
+    name = getattr(args, "name", None)
+    base_dir = Path("bucket") / name if name else Path("bucket")
+    config_kwargs["output_dir"] = args.output_dir or str(base_dir)
+    config_kwargs["db_path"] = args.db or str(base_dir / "pipeline.db")
+    config_kwargs["log_dir"] = args.log_dir or str(base_dir / "logs")
 
     config = PipelineConfig(**config_kwargs)
     await cmd_run(args, config)

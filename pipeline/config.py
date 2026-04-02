@@ -23,9 +23,9 @@ class PipelineConfig(BaseSettings):
 
     # --- I/O ---
     input_path: Path = Path("records/input.jsonl")
-    output_dir: Path = Path("output")
-    db_path: Path = Path("pipeline.db")
-    log_dir: Path = Path("logs")
+    output_dir: Path = Path("bucket")
+    db_path: Path = Path("bucket/pipeline.db")
+    log_dir: Path = Path("bucket/logs")
 
     # --- Scope ---
     limit: int | None = None
@@ -64,6 +64,8 @@ class PipelineConfig(BaseSettings):
     # --- Cost / safety ---
     max_cost: float | None = None
     dry_run: bool = False
+    max_consecutive_errors: int = Field(default=10, ge=1)
+    max_discovery_retries: int = Field(default=3, ge=0)
 
     # --- Enrichment ---
     enrichment_source: Literal["serper", "brave", "both"] = "serper"

@@ -71,7 +71,7 @@ class SerperClient:
             ),
         )
 
-        result = self._extract(data, business_name, query)
+        result = self._extract(data, business_name, query, domain_hint=domain_hint)
 
         # Fallback: if site:-scoped query returned no emails, retry without site: filter
         if domain_hint and not result.candidate_emails and "site:" in query:
@@ -91,7 +91,7 @@ class SerperClient:
                     "Serper fallback retry %d: %s (wait %.1fs)", attempt, exc, delay,
                 ),
             )
-            fallback = self._extract(data2, business_name, fallback_query)
+            fallback = self._extract(data2, business_name, fallback_query, domain_hint=domain_hint)
             if fallback.candidate_emails:
                 result = EnrichmentResult(
                     candidate_emails=fallback.candidate_emails,
@@ -125,7 +125,13 @@ class SerperClient:
             resp.raise_for_status()
             return await resp.json()
 
-    def _extract(self, data: dict, business_name: str, query: str) -> EnrichmentResult:
+    def _extract(
+        self,
+        data: dict,
+        business_name: str,
+        query: str,
+        domain_hint: str | None = None,
+    ) -> EnrichmentResult:
         emails: list[str] = []
         snippets: list[str] = []
         domain: str | None = None
@@ -161,6 +167,12 @@ class SerperClient:
                 if fuzz.ratio(norm_biz.replace(" ", ""), netloc_norm) >= 85:
                     domain = netloc
                     break
+
+        # Only keep emails that belong to the confirmed or hinted domain.
+        # This prevents contamination from unrelated organic results (e.g. Yelp, directories).
+        known_domain = domain or domain_hint
+        if known_domain:
+            unique_emails = [e for e in unique_emails if e.endswith(f"@{known_domain}")]
 
         return EnrichmentResult(
             candidate_emails=unique_emails,
