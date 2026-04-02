@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS records (
     -- Discovery outputs
     candidate_email     TEXT,
     candidate_emails    TEXT,
+    subdomain_emails    TEXT,
     candidate_domain    TEXT,
     discovery_source    TEXT,
     discovery_attempts  INTEGER DEFAULT 0,
@@ -76,9 +77,9 @@ INSERT_RECORD_SQL = """
 INSERT OR IGNORE INTO records (
     unique_id, business_name, agent_name, state, jurisdiction,
     position_type, name_entity_type, candidate_email, candidate_emails,
-    candidate_domain, discovery_source, discovery_attempts,
+    subdomain_emails, candidate_domain, discovery_source, discovery_attempts,
     strategy, is_org_agent, status
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 UPSERT_CHECKPOINT_SQL = """
@@ -130,6 +131,7 @@ async def insert_records_batch(
                     r.get("name_entity_type", ""),
                     r.get("candidate_email"),
                     r.get("candidate_emails"),
+                    r.get("subdomain_emails"),
                     r.get("candidate_domain"),
                     r.get("discovery_source"),
                     r.get("discovery_attempts", 0),
@@ -171,13 +173,15 @@ async def update_record_discovery(conn: aiosqlite.Connection, result: dict) -> N
     await conn.execute(
         """UPDATE records SET
                status = ?, candidate_email = ?, candidate_emails = ?,
-               candidate_domain = ?, discovery_source = ?, discovery_attempts = ?,
+               subdomain_emails = ?, candidate_domain = ?,
+               discovery_source = ?, discovery_attempts = ?,
                updated_at = datetime('now')
            WHERE unique_id = ?""",
         (
             result.get("status", "pending_discovery"),
             result.get("candidate_email"),
             result.get("candidate_emails"),
+            result.get("subdomain_emails"),
             result.get("candidate_domain"),
             result.get("discovery_source"),
             result.get("discovery_attempts", 1),

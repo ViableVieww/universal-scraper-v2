@@ -41,6 +41,7 @@ class InputRecord:
 @dataclass
 class EnrichmentResult:
     candidate_emails: list[str] = field(default_factory=list)
+    subdomain_emails: list[str] = field(default_factory=list)
     candidate_domain: str | None = None
     source: Literal["serper", "brave"] = "serper"
     query_used: str = ""

@@ -154,39 +154,37 @@ class ProducerWorker:
 
     async def _run_discovery_retries(self) -> None:
         for attempt in range(1, self.config.max_discovery_retries + 1):
-            rows = await db.fetch_pending_discovery(self.conn, limit=self.config.chunk_size)
-            if not rows:
-                logger.info("Discovery retry %d: nothing pending — done", attempt)
+            retried = 0
+            # Drain all pending_discovery records this round, chunk by chunk
+            while True:
+                rows = await db.fetch_pending_discovery(self.conn, limit=self.config.chunk_size)
+                if not rows:
+                    break
+                retried += len(rows)
+                attempts_by_id = {row["unique_id"]: (row["discovery_attempts"] or 1) for row in rows}
+                records = [
+                    InputRecord(
+                        unique_id=row["unique_id"],
+                        business_name=row["business_name"] or "",
+                        agent_name=row["agent_name"] or "",
+                        state=row["state"] or "",
+                        jurisdiction=row["jurisdiction"] or "",
+                        position_type=row["position_type"] or "",
+                        name_entity_type=row["name_entity_type"] or "",
+                    )
+                    for row in rows
+                ]
+                results = await asyncio.gather(*[self._process_record(r) for r in records])
+                for result in results:
+                    result["discovery_attempts"] = attempts_by_id.get(result["unique_id"], 1) + 1
+                    await db.update_record_discovery(self.conn, result)
+                if self.cost_tracker.ceiling_reached():
+                    return
+
+            if retried == 0:
+                logger.info("Discovery retry %d/%d: nothing pending — done", attempt, self.config.max_discovery_retries)
                 break
-
-            logger.info(
-                "Discovery retry %d/%d: %d records",
-                attempt, self.config.max_discovery_retries, len(rows),
-            )
-
-            attempts_by_id = {row["unique_id"]: (row["discovery_attempts"] or 1) for row in rows}
-
-            records = [
-                InputRecord(
-                    unique_id=row["unique_id"],
-                    business_name=row["business_name"] or "",
-                    agent_name=row["agent_name"] or "",
-                    state=row["state"] or "",
-                    jurisdiction=row["jurisdiction"] or "",
-                    position_type=row["position_type"] or "",
-                    name_entity_type=row["name_entity_type"] or "",
-                )
-                for row in rows
-            ]
-
-            results = await asyncio.gather(*[self._process_record(r) for r in records])
-
-            for result in results:
-                result["discovery_attempts"] = attempts_by_id.get(result["unique_id"], 1) + 1
-                await db.update_record_discovery(self.conn, result)
-
-            if self.cost_tracker.ceiling_reached():
-                break
+            logger.info("Discovery retry %d/%d: retried %d records", attempt, self.config.max_discovery_retries, retried)
 
     async def _process_chunk(self, chunk: list[InputRecord]) -> list[dict]:
         tasks = [self._process_record(record) for record in chunk]
@@ -249,6 +247,7 @@ class ProducerWorker:
         # Phase 2: Serper/Brave enrichment (if no domain or to find emails in snippets)
         enrichment_emails: list[str] = []
         enrichment_domain: str | None = None
+        all_subdomain_emails: list[str] = []
 
         if config.enrichment_source in ("serper", "both"):
             try:
@@ -263,6 +262,7 @@ class ProducerWorker:
                     self.cost_tracker.record_call("serper")
 
                 enrichment_emails.extend(serper_result.candidate_emails)
+                all_subdomain_emails.extend(serper_result.subdomain_emails)
                 if not domain and serper_result.candidate_domain:
                     enrichment_domain = serper_result.candidate_domain
                     result["discovery_source"] = "serper"
@@ -295,6 +295,7 @@ class ProducerWorker:
                     self.cost_tracker.record_call("brave")
 
                 enrichment_emails.extend(brave_result.candidate_emails)
+                all_subdomain_emails.extend(brave_result.subdomain_emails)
                 if not domain and not enrichment_domain and brave_result.candidate_domain:
                     enrichment_domain = brave_result.candidate_domain
                     result["discovery_source"] = "brave"
@@ -326,6 +327,9 @@ class ProducerWorker:
 
         # Cap at reasonable limit
         all_candidates = all_candidates[:10]
+
+        if all_subdomain_emails:
+            result["subdomain_emails"] = json.dumps(list(dict.fromkeys(all_subdomain_emails)))
 
         effective_domain = domain or enrichment_domain
         result["discovery_attempts"] = 1
@@ -365,6 +369,7 @@ class ProducerWorker:
             "name_entity_type": record.name_entity_type,
             "candidate_email": None,
             "candidate_emails": None,
+            "subdomain_emails": None,
             "candidate_domain": None,
             "discovery_source": None,
             "discovery_attempts": 0,
