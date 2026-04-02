@@ -5,6 +5,7 @@ import json
 import logging
 from pathlib import Path
 
+import aiodns
 import aiohttp
 import aiosqlite
 
@@ -39,6 +40,7 @@ class ProducerWorker:
 
         self._dns_sem = asyncio.Semaphore(config.dns_concurrency)
         self._serper_sem = asyncio.Semaphore(config.serper_concurrency)
+        self._dns_resolver = aiodns.DNSResolver()
 
         _serper_bucket = TokenBucket(
             capacity=config.serper_rate_limit,
@@ -173,6 +175,7 @@ class ProducerWorker:
             max_attempts=config.max_attempts,
             jitter=config.backoff_jitter,
             dry_run=config.dry_run,
+            resolver=self._dns_resolver,
         )
 
         candidate_emails: list[str] = []

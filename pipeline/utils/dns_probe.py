@@ -19,6 +19,7 @@ async def probe_domains(
     max_attempts: int = 3,
     jitter: float = 0.2,
     dry_run: bool = False,
+    resolver: aiodns.DNSResolver | None = None,
 ) -> tuple[str | None, str | None]:
     """Probe DNS MX records for candidate domains derived from a business name.
 
@@ -35,7 +36,8 @@ async def probe_domains(
     if not stems:
         return (None, None)
 
-    resolver = aiodns.DNSResolver()
+    if resolver is None:
+        resolver = aiodns.DNSResolver()
     base, max_delay = SERVICE_BACKOFF["dns"]
 
     async with semaphore:

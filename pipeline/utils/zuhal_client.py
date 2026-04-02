@@ -52,7 +52,7 @@ class ZuhalClient:
         await self.rate_limiter.acquire()
 
         # Anti-fingerprinting random delay
-        await asyncio.sleep(random.uniform(0.5, 2.5))
+        await asyncio.sleep(random.uniform(0.1, 0.5))
 
         return await with_backoff(
             lambda: self._call_api(email),
@@ -76,6 +76,7 @@ class ZuhalClient:
             "https://zuhal.io/api/v1/verify",
             json={"email": email},
             headers=headers,
+            timeout=aiohttp.ClientTimeout(total=30),
         ) as resp:
             status = resp.status
 
@@ -94,7 +95,7 @@ class ZuhalClient:
                 self.circuit_breaker.trip()
                 raise _RetryableHTTPError(429)
 
-            if status in (500, 503):
+            if status in (500, 503, 504):
                 raise _RetryableHTTPError(status)
 
             resp.raise_for_status()
