@@ -277,6 +277,8 @@ async def main() -> None:
     config_kwargs["output_dir"] = args.output_dir or str(base_dir)
     config_kwargs["db_path"] = args.db or str(base_dir / "pipeline.db")
     config_kwargs["log_dir"] = args.log_dir or str(base_dir / "logs")
+    if name and not config_kwargs.get("run_id"):
+        config_kwargs["run_id"] = name
 
     config = PipelineConfig(**config_kwargs)
     await cmd_run(args, config)

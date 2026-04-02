@@ -217,6 +217,7 @@ __marimo__/
 
 # Records
 records*/
+bucket*/
 output*/
 logs*/
 *.db
