@@ -157,7 +157,7 @@ def main() -> None:
                  label="git init+fetch")
 
         if args.provision:
-            _run(ssh, f"mkdir -p {WORK_DIR}/records {WORK_DIR}/output {WORK_DIR}/logs",
+            _run(ssh, f"mkdir -p {WORK_DIR}/records {WORK_DIR}/bucket/logs",
                  label="mkdir dirs")
 
         # ── Step 3: Install dependencies ──────────────────────────────
@@ -187,15 +187,8 @@ def main() -> None:
                 parts = existing.split("--consumer-only", 1)
                 consumer_extra = parts[1].strip() if len(parts) == 2 else ""
 
-        # Always include --db and --log-dir defaults if not already present
-        if "--db" not in consumer_extra:
-            consumer_extra = f"--db {WORK_DIR}/pipeline.db {consumer_extra}".strip()
-        if "--log-dir" not in consumer_extra:
-            consumer_extra = f"--log-dir {WORK_DIR}/logs {consumer_extra}".strip()
-        if "--db" not in producer_cmd:
-            producer_cmd = f"--db {WORK_DIR}/pipeline.db {producer_cmd}".strip()
-        if "--log-dir" not in producer_cmd:
-            producer_cmd = f"--log-dir {WORK_DIR}/logs {producer_cmd}".strip()
+        # --db and --log-dir default to bucket/pipeline.db and bucket/logs via config;
+        # only inject explicit paths if the caller specifically passed them.
 
         producer_unit = _PRODUCER_UNIT.format(
             work_dir=WORK_DIR,
