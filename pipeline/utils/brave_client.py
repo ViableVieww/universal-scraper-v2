@@ -71,7 +71,7 @@ class BraveClient:
             ),
         )
 
-        return self._extract(data, business_name, query, domain_hint=domain_hint)
+        return self._extract(data, business_name, query, domain_hint=domain_hint, strategy=strategy, agent_name=agent_name)
 
     async def _call_api(self, query: str) -> dict:
         headers = {
@@ -108,6 +108,8 @@ class BraveClient:
         business_name: str,
         query: str,
         domain_hint: str | None = None,
+        strategy: str = "without",
+        agent_name: str | None = None,
     ) -> EnrichmentResult:
         emails: list[str] = []
         snippets: list[str] = []
@@ -165,6 +167,34 @@ class BraveClient:
                 elif host.endswith(f".{known_domain}"):
                     subdomain_emails.append(e)
             unique_emails = filtered
+
+        # For "with" strategy, only keep snippet emails whose local part
+        # fuzzy-matches the agent name. Unmatched emails are discarded —
+        # the producer will generate personal patterns from the domain instead.
+        if strategy == "with" and agent_name:
+            parts = agent_name.strip().lower().split()
+            first = parts[0] if parts else ""
+            last = parts[-1] if len(parts) > 1 else ""
+            name_variants = [v for v in [
+                f"{first}{last}",
+                f"{first}.{last}",
+                f"{first}_{last}",
+                f"{first[0]}{last}" if first else "",
+                first,
+                last,
+            ] if v]
+            matched: list[str] = []
+            for e in unique_emails:
+                local = e.split("@")[0]
+                score = max(fuzz.ratio(local, v) for v in name_variants)
+                if score >= 75:
+                    matched.append(e)
+                else:
+                    logger.debug(
+                        "Brave snippet email %s discarded for with-strategy (best score %d)",
+                        e, score,
+                    )
+            unique_emails = matched
 
         return EnrichmentResult(
             candidate_emails=unique_emails,
