@@ -45,6 +45,7 @@ class BraveClient:
         state: str,
         domain_hint: str | None,
         strategy: Literal["with", "without"],
+        fallback_blocklist: set[str] | None = None,
     ) -> EnrichmentResult:
         query = self._build_query(business_name, agent_name, state, domain_hint, strategy)
 
@@ -71,7 +72,7 @@ class BraveClient:
             ),
         )
 
-        return self._extract(data, business_name, query, domain_hint=domain_hint, strategy=strategy, agent_name=agent_name)
+        return self._extract(data, business_name, query, domain_hint=domain_hint, strategy=strategy, agent_name=agent_name, fallback_blocklist=fallback_blocklist)
 
     async def _call_api(self, query: str) -> dict:
         headers = {
@@ -110,6 +111,7 @@ class BraveClient:
         domain_hint: str | None = None,
         strategy: str = "without",
         agent_name: str | None = None,
+        fallback_blocklist: set[str] | None = None,
     ) -> EnrichmentResult:
         emails: list[str] = []
         snippets: list[str] = []
@@ -136,7 +138,9 @@ class BraveClient:
                 unique_emails.append(lower)
 
         norm_biz = business_name.lower()
+        blocked = fallback_blocklist or set()
         first_organic_domain: str | None = None
+        is_fallback_domain = False
         for result in web_results:
             url = result.get("url", "")
             if not url:
@@ -144,8 +148,6 @@ class BraveClient:
             netloc = urlparse(url).netloc.lower().lstrip("www.")
             if not netloc:
                 continue
-            if first_organic_domain is None:
-                first_organic_domain = netloc
             netloc_base = netloc.rsplit(".", 1)[0] if "." in netloc else netloc
             netloc_norm = netloc_base.replace("-", "")
             if fuzz.ratio(norm_biz.replace(" ", ""), netloc_norm) >= 85:
@@ -158,9 +160,13 @@ class BraveClient:
                 if fuzz.ratio(norm_biz.replace(" ", ""), ln_norm) >= 85:
                     domain = long_name.lower()
                     break
-        # For with-strategy, fall back to first organic domain if fuzzy match found nothing
+            # Track first non-blocked organic domain for with-strategy fallback
+            if first_organic_domain is None and netloc not in blocked:
+                first_organic_domain = netloc
+        # For with-strategy, fall back to first non-blocked organic domain
         if not domain and strategy == "with" and first_organic_domain:
             domain = first_organic_domain
+            is_fallback_domain = True
             logger.debug("Brave using first organic domain as fallback: %s", domain)
 
         # Split emails into confirmed-domain and subdomain buckets.
@@ -209,6 +215,7 @@ class BraveClient:
             candidate_emails=unique_emails,
             subdomain_emails=subdomain_emails,
             candidate_domain=domain,
+            is_fallback_domain=is_fallback_domain,
             source="brave",
             query_used=query,
             raw_snippets=snippets,

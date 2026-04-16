@@ -10,6 +10,7 @@ import aiohttp
 import aiosqlite
 
 from pipeline.config import PipelineConfig
+from pipeline.constants import FALLBACK_DOMAIN_BLOCKLIST
 from pipeline.models import InputRecord, PipelineHaltError
 from pipeline.utils.cost_tracker import CostTracker
 from pipeline.utils.dns_probe import probe_domains
@@ -47,6 +48,12 @@ class ProducerWorker:
 
         self._dns_sem = asyncio.Semaphore(config.dns_concurrency)
         self._enrichment_sem = asyncio.Semaphore(config.serper_concurrency)
+
+        # Dynamic fallback domain blocklist.
+        # Starts from the static seed; grows when a domain is seen as first-organic
+        # fallback for 2+ different businesses within this run.
+        self._fallback_blocklist: set[str] = set(FALLBACK_DOMAIN_BLOCKLIST)
+        self._fallback_seen: Counter[str] = Counter()
 
         _serper_bucket = TokenBucket(
             capacity=config.serper_rate_limit,
@@ -258,6 +265,7 @@ class ProducerWorker:
                         record.state,
                         domain,
                         strategy,
+                        fallback_blocklist=self._fallback_blocklist,
                     )
                     self.cost_tracker.record_call("serper")
 
@@ -266,6 +274,8 @@ class ProducerWorker:
                 if not domain and serper_result.candidate_domain:
                     enrichment_domain = serper_result.candidate_domain
                     result["discovery_source"] = "serper"
+                    if serper_result.is_fallback_domain:
+                        self._record_fallback_domain(serper_result.candidate_domain)
 
             except PipelineHaltError:
                 raise
@@ -291,6 +301,7 @@ class ProducerWorker:
                         record.state,
                         domain or enrichment_domain,
                         strategy,
+                        fallback_blocklist=self._fallback_blocklist,
                     )
                     self.cost_tracker.record_call("brave")
 
@@ -299,6 +310,8 @@ class ProducerWorker:
                 if not domain and not enrichment_domain and brave_result.candidate_domain:
                     enrichment_domain = brave_result.candidate_domain
                     result["discovery_source"] = "brave"
+                    if brave_result.is_fallback_domain:
+                        self._record_fallback_domain(brave_result.candidate_domain)
 
             except PipelineHaltError:
                 raise
@@ -356,6 +369,14 @@ class ProducerWorker:
             )
 
         return result
+
+    def _record_fallback_domain(self, domain: str) -> None:
+        """Track domains used as first-organic fallback. Promotes to blocklist on 2nd hit."""
+        self._fallback_seen[domain] += 1
+        if self._fallback_seen[domain] >= 2:
+            if domain not in self._fallback_blocklist:
+                self._fallback_blocklist.add(domain)
+                logger.info("Dynamic blocklist: added %s (seen %d times as fallback)", domain, self._fallback_seen[domain])
 
     @staticmethod
     def _base_result(record: InputRecord, strategy: str, org_agent: bool) -> dict:
