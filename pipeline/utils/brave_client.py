@@ -136,11 +136,16 @@ class BraveClient:
                 unique_emails.append(lower)
 
         norm_biz = business_name.lower()
+        first_organic_domain: str | None = None
         for result in web_results:
             url = result.get("url", "")
             if not url:
                 continue
             netloc = urlparse(url).netloc.lower().lstrip("www.")
+            if not netloc:
+                continue
+            if first_organic_domain is None:
+                first_organic_domain = netloc
             netloc_base = netloc.rsplit(".", 1)[0] if "." in netloc else netloc
             netloc_norm = netloc_base.replace("-", "")
             if fuzz.ratio(norm_biz.replace(" ", ""), netloc_norm) >= 85:
@@ -153,6 +158,10 @@ class BraveClient:
                 if fuzz.ratio(norm_biz.replace(" ", ""), ln_norm) >= 85:
                     domain = long_name.lower()
                     break
+        # For with-strategy, fall back to first organic domain if fuzzy match found nothing
+        if not domain and strategy == "with" and first_organic_domain:
+            domain = first_organic_domain
+            logger.debug("Brave using first organic domain as fallback: %s", domain)
 
         # Split emails into confirmed-domain and subdomain buckets.
         # Unrelated domains are discarded entirely.

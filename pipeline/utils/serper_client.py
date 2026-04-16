@@ -159,16 +159,25 @@ class SerperClient:
 
         if not domain:
             norm_biz = business_name.lower()
+            first_organic_domain: str | None = None
             for result in data.get("organic", []):
                 link = result.get("link", "")
                 if not link:
                     continue
                 netloc = urlparse(link).netloc.lower().lstrip("www.")
+                if not netloc:
+                    continue
+                if first_organic_domain is None:
+                    first_organic_domain = netloc
                 netloc_base = netloc.rsplit(".", 1)[0] if "." in netloc else netloc
                 netloc_norm = netloc_base.replace("-", "")
                 if fuzz.ratio(norm_biz.replace(" ", ""), netloc_norm) >= 85:
                     domain = netloc
                     break
+            # For with-strategy, fall back to first organic domain if fuzzy match found nothing
+            if not domain and strategy == "with" and first_organic_domain:
+                domain = first_organic_domain
+                logger.debug("Serper using first organic domain as fallback: %s", domain)
 
         # Split emails into confirmed-domain and subdomain buckets.
         # Unrelated domains are discarded entirely.
