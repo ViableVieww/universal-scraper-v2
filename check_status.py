@@ -12,9 +12,9 @@ import sys
 
 import paramiko
 
-HOST   = "142.171.178.179"
-USER   = "root"
-PASSWD = "mF5oj1doCh0067XQKH"
+HOST   = ""
+USER   = ""
+PASSWD = ""
 DB     = "/root/pipeline_clean.db"
 LOG    = "/root/verify.log"
 
