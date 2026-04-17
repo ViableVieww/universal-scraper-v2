@@ -561,8 +561,9 @@ def main():
     client.health_check()
 
     # Step 2: open DB
-    conn = sqlite3.connect(args.db, check_same_thread=False)
+    conn = sqlite3.connect(args.db, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
 
     # Step 3: ensure verifier_jobs table exists
     init_db(conn)
