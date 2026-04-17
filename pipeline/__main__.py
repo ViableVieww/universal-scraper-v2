@@ -243,6 +243,106 @@ async def _write_outputs(conn, config: PipelineConfig) -> None:
         json.dump(summary, f, indent=2, default=str)
     logger.info("Wrote report to %s", report_path)
 
+    # summary.md
+    md_path = output_dir / "summary.md"
+    _write_md_summary(summary, config, md_path)
+    logger.info("Wrote summary to %s", md_path)
+
+
+def _write_md_summary(summary: dict, config: PipelineConfig, path: Path) -> None:
+    from datetime import datetime, timezone
+
+    by_status: dict[str, int] = summary.get("records_by_status", {})
+    total: int = summary.get("total_records", 0)
+    offset: int = summary.get("producer_offset", 0)
+    done: bool = summary.get("producer_done", False)
+    stats: dict = summary.get("stats") or {}
+    failures: dict = summary.get("failures_by_phase", {})
+
+    pv   = by_status.get("pending_validation", 0)
+    pd   = by_status.get("pending_discovery", 0)
+    df   = by_status.get("discovery_failed", 0)
+    val  = by_status.get("validated", 0)
+    vf   = by_status.get("validation_failed", 0)
+
+    hit_rate  = f"{pv / total * 100:.1f}%" if total else "—"
+    miss_rate = f"{df / total * 100:.1f}%" if total else "—"
+    cost      = stats.get("estimated_cost_usd", 0.0)
+
+    serper_calls = stats.get("serper_calls", 0)
+    brave_calls  = stats.get("brave_calls", 0)
+    zuhal_calls  = stats.get("zuhal_calls", 0)
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    status_label = "Complete" if done else "In Progress"
+
+    lines: list[str] = [
+        "# Pipeline Run Summary",
+        "",
+        f"**Generated:** {now}  ",
+        f"**Input:** `{config.input_path}`  ",
+        f"**Status:** {status_label}",
+        "",
+        "---",
+        "",
+        "## Progress",
+        "",
+        f"| Metric | Value |",
+        f"|---|---|",
+        f"| Records processed | {total:,} |",
+        f"| Producer offset | {offset:,} |",
+        f"| Run complete | {'Yes' if done else 'No'} |",
+        "",
+        "---",
+        "",
+        "## Discovery Buckets",
+        "",
+        "| Status | Count | % of Total |",
+        "|---|---|---|",
+        f"| `pending_validation` | {pv:,} | {pv/total*100:.1f}% |" if total else f"| `pending_validation` | {pv:,} | — |",
+        f"| `pending_discovery` (retry) | {pd:,} | {pd/total*100:.1f}% |" if total else f"| `pending_discovery` | {pd:,} | — |",
+        f"| `discovery_failed` | {df:,} | {df/total*100:.1f}% |" if total else f"| `discovery_failed` | {df:,} | — |",
+        f"| **Total** | **{total:,}** | |",
+        "",
+        f"**Hit rate:** {hit_rate}  ",
+        f"**Miss rate:** {miss_rate}",
+        "",
+        "---",
+        "",
+        "## Validation Results",
+        "",
+        "| Status | Count |",
+        "|---|---|",
+        f"| `validated` | {val:,} |",
+        f"| `validation_failed` | {vf:,} |",
+        "",
+        "---",
+        "",
+        "## API Usage",
+        "",
+        "| Service | Calls | Est. Cost (USD) |",
+        "|---|---|---|",
+        f"| Serper | {serper_calls:,} | — |",
+        f"| Brave | {brave_calls:,} | — |",
+        f"| Zuhal | {zuhal_calls:,} | — |",
+        f"| **Total** | | **${cost:.4f}** |",
+    ]
+
+    if failures:
+        lines += [
+            "",
+            "---",
+            "",
+            "## Failures by Phase",
+            "",
+            "| Phase | Count |",
+            "|---|---|",
+        ]
+        for phase, n in sorted(failures.items()):
+            lines.append(f"| {phase} | {n:,} |")
+
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
 
 async def main() -> None:
     args = parse_args()
