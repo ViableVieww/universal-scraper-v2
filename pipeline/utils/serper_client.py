@@ -45,6 +45,7 @@ class SerperClient:
         state: str,
         domain_hint: str | None,
         strategy: Literal["with", "without"],
+        fallback_blocklist: set[str] | None = None,
     ) -> EnrichmentResult:
         query = self._build_query(business_name, agent_name, state, domain_hint, strategy)
 
@@ -71,7 +72,7 @@ class SerperClient:
             ),
         )
 
-        result = self._extract(data, business_name, query, domain_hint=domain_hint)
+        result = self._extract(data, business_name, query, domain_hint=domain_hint, strategy=strategy, agent_name=agent_name, fallback_blocklist=fallback_blocklist)
 
         # Fallback: if site:-scoped query returned no emails, retry without site: filter
         if domain_hint and not result.candidate_emails and "site:" in query:
@@ -91,7 +92,7 @@ class SerperClient:
                     "Serper fallback retry %d: %s (wait %.1fs)", attempt, exc, delay,
                 ),
             )
-            fallback = self._extract(data2, business_name, fallback_query, domain_hint=domain_hint)
+            fallback = self._extract(data2, business_name, fallback_query, domain_hint=domain_hint, strategy=strategy, agent_name=agent_name, fallback_blocklist=fallback_blocklist)
             if fallback.candidate_emails:
                 result = EnrichmentResult(
                     candidate_emails=fallback.candidate_emails,
@@ -131,6 +132,9 @@ class SerperClient:
         business_name: str,
         query: str,
         domain_hint: str | None = None,
+        strategy: str = "without",
+        agent_name: str | None = None,
+        fallback_blocklist: set[str] | None = None,
     ) -> EnrichmentResult:
         emails: list[str] = []
         snippets: list[str] = []
@@ -155,18 +159,31 @@ class SerperClient:
             parsed = urlparse(kg["website"])
             domain = parsed.netloc.lower().lstrip("www.")
 
+        is_fallback_domain = False
         if not domain:
             norm_biz = business_name.lower()
+            blocked = fallback_blocklist or set()
+            first_organic_domain: str | None = None
             for result in data.get("organic", []):
                 link = result.get("link", "")
                 if not link:
                     continue
                 netloc = urlparse(link).netloc.lower().lstrip("www.")
+                if not netloc:
+                    continue
                 netloc_base = netloc.rsplit(".", 1)[0] if "." in netloc else netloc
                 netloc_norm = netloc_base.replace("-", "")
                 if fuzz.ratio(norm_biz.replace(" ", ""), netloc_norm) >= 85:
                     domain = netloc
                     break
+                # Track first non-blocked organic domain for with-strategy fallback
+                if first_organic_domain is None and netloc not in blocked:
+                    first_organic_domain = netloc
+            # For with-strategy, fall back to first non-blocked organic domain
+            if not domain and strategy == "with" and first_organic_domain:
+                domain = first_organic_domain
+                is_fallback_domain = True
+                logger.debug("Serper using first organic domain as fallback: %s", domain)
 
         # Split emails into confirmed-domain and subdomain buckets.
         # Unrelated domains are discarded entirely.
@@ -182,10 +199,39 @@ class SerperClient:
                     subdomain_emails.append(e)
             unique_emails = filtered
 
+        # For "with" strategy, only keep snippet emails whose local part
+        # fuzzy-matches the agent name. Unmatched emails are discarded —
+        # the producer will generate personal patterns from the domain instead.
+        if strategy == "with" and agent_name:
+            parts = agent_name.strip().lower().split()
+            first = parts[0] if parts else ""
+            last = parts[-1] if len(parts) > 1 else ""
+            name_variants = [v for v in [
+                f"{first}{last}",
+                f"{first}.{last}",
+                f"{first}_{last}",
+                f"{first[0]}{last}" if first else "",
+                first,
+                last,
+            ] if v]
+            matched: list[str] = []
+            for e in unique_emails:
+                local = e.split("@")[0]
+                score = max(fuzz.ratio(local, v) for v in name_variants)
+                if score >= 75:
+                    matched.append(e)
+                else:
+                    logger.debug(
+                        "Serper snippet email %s discarded for with-strategy (best score %d)",
+                        e, score,
+                    )
+            unique_emails = matched
+
         return EnrichmentResult(
             candidate_emails=unique_emails,
             subdomain_emails=subdomain_emails,
             candidate_domain=domain,
+            is_fallback_domain=is_fallback_domain,
             source="serper",
             query_used=query,
             raw_snippets=snippets,

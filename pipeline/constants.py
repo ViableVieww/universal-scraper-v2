@@ -27,6 +27,19 @@ MAX_WITHOUT_CANDIDATES: int = 3  # generic org patterns to try per record
 # --- Zuhal circuit breaker ---
 ZUHAL_CIRCUIT_BREAKER_COOLDOWN_SECONDS: float = 600.0  # 10 minutes
 
+# --- Fallback domain blocklist ---
+# Known directory/aggregator domains that should never be used as a business domain.
+# This list grows at runtime via ProducerWorker._fallback_blocklist when a domain
+# is seen as first-organic fallback for 2+ different businesses in the same run.
+FALLBACK_DOMAIN_BLOCKLIST: frozenset[str] = frozenset({
+    "bbb.org", "yelp.com", "yellowpages.com", "manta.com",
+    "bizapedia.com", "opencorporates.com", "corporationwiki.com",
+    "dnb.com", "zoominfo.com", "linkedin.com", "facebook.com",
+    "instagram.com", "twitter.com", "x.com", "google.com",
+    "mapquest.com", "whitepages.com", "spokeo.com", "intelius.com",
+    "bizstanding.com", "bizjournals.com", "inc.com", "bloomberg.com",
+})
+
 # --- Consumer polling ---
 CONSUMER_POLL_MAX_INTERVAL_SECONDS: int = 30
 CONSUMER_POLL_EMPTY_BACKOFF_THRESHOLD: int = 3  # doubles interval after N consecutive empties
