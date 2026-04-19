@@ -14,7 +14,7 @@ The **Consumer Worker** runs in the background, polling SQLite for candidates ma
 
 This split exists because Phase 3 (validation) touches external mail servers. That is the operation that caused the previous VPS to be blacklisted. Isolating it behind a token bucket and giving it its own failure budget is a risk-isolation strategy, not just a performance one.
 
-```
+```text
 INPUT JSONL
      │
      ▼
@@ -147,7 +147,7 @@ The pipeline exits when both workers stop — which in a normal run means the pr
 
 ## Output
 
-```
+```text
 output/
   valid_emails.csv      — validated emails only, with metadata
   results.jsonl         — all records with full pipeline metadata
@@ -198,13 +198,100 @@ Then re-run with `--producer-only` to pick them up without touching already-vali
 
 The `records` table drives the state machine. The `status` column is the handoff point between the two workers:
 
-```
+```text
 queued → pending_validation → validated
        → discovery_failed
                            → validation_failed
 ```
 
 The `checkpoints` table stores `producer_offset` (for cold-restart safety) and `producer_done` (flipped when the input JSONL is exhausted). The `failures` table is append-only — every failed attempt is logged with its phase, attempt number, and error detail.
+
+---
+
+## SMTP Verification via SIM (verify_emails.py)
+
+USX ships a second validation approach alongside Zuhal: **direct SMTP verification routed through a SIM-bound device**. This is implemented in `verify_emails.py` and `check_status.py`, and is designed to run against an already-populated `pipeline.db` where records are in `pending_validation` state.
+
+### Why a second approach?
+
+Zuhal is a managed API — it abstracts away the SMTP handshake but introduces rate caps, cost per call, and a third-party dependency. The SIM-based approach does the SMTP verification directly (`RCPT TO` check) from a device or VPS whose outbound IP has port 25 open. It is cheaper at scale and avoids Zuhal's 200 calls/hr ceiling, but requires a carrier or ISP that does not block port 25.
+
+### How it works
+
+```text
+pipeline.db (pending_validation records)
+     │
+     ▼
+┌─────────────────────────────────────┐
+│           verify_emails.py          │
+│                                     │
+│  1. Read 500 records at a time      │
+│  2. POST /jobs/batch to verifier    │  ← email-verifier.bbops.io
+│  3. Poll GET /batches/{id} until    │
+│     done (10s → 120s backoff,       │
+│     30 min timeout + requeue)       │
+│  4. Pick best result per record:    │
+│     valid > catch_all > error >     │
+│     invalid                         │
+│  5. Update pipeline.db + write CSV  │
+└─────────────────────────────────────┘
+     │
+     ▼
+valid_emails.csv + pipeline.db updated
+```
+
+The verifier server (`email-verifier.bbops.io`) manages a job queue. Workers — Android devices or PCs with port 25 open on a SIM or ISP — pull jobs, run SMTP `RCPT TO` checks, and post results back. `verify_emails.py` is the client that feeds jobs in and collects results out.
+
+### Running the SMTP verifier
+
+```bash
+# Single run — processes all pending_validation records and exits
+PIPELINE_DB=/path/to/pipeline.db OUTPUT_CSV=/path/to/valid_emails.csv python3 verify_emails.py
+
+# With explicit flags
+python3 verify_emails.py --db pipeline.db --out valid_emails.csv
+```
+
+The script is resume-safe — a `verifier_jobs` table is added to `pipeline.db` on first run, and any subsequent run skips emails already submitted. If interrupted mid-run, restart with the same command and it picks up where it left off.
+
+### Monitoring a live run (VPS)
+
+`check_status.py` connects to the VPS over SSH and prints a live status snapshot:
+
+```bash
+# Single check
+python check_status.py
+
+# Live watch — refreshes every 60s
+python check_status.py --watch
+
+# Custom interval
+python check_status.py --watch --interval 30
+```
+
+Output includes processed/remaining counts, SMTP valid vs accept-all breakdown, and last log lines from the VPS.
+
+### Validation result states
+
+| Status | Meaning |
+| --- | --- |
+| `valid` | SMTP server accepted the recipient — mailbox confirmed |
+| `catch_all` (accept-all) | Domain accepts all addresses — mailbox-level validity uncertain |
+| `invalid` | SMTP server rejected the recipient (550/551/552/553/554) |
+| `error` | Network error, port 25 blocked, or Spamhaus rejection |
+
+Records where the best result is `valid` or `catch_all` are marked `validated` in `pipeline.db`. All others are marked `validation_failed`.
+
+### Comparison: Zuhal vs SMTP/SIM
+
+| | Zuhal | SMTP / SIM |
+| --- | --- | --- |
+| Cost | Per-call API fee | Infrastructure only |
+| Rate | 200 calls/hr cap | Worker-bound (no API limit) |
+| Setup | API key only | Requires port 25 open on worker |
+| Accuracy | High (managed service) | High (direct SMTP handshake) |
+| Blacklist risk | Managed by Zuhal | Depends on worker IP reputation |
+| Resume support | Via `pipeline.db` status | Via `verifier_jobs` table |
 
 ---
 
@@ -223,7 +310,7 @@ The full architecture decision record lives in `PIPELINE_ARCHITECTURE.md`. Key d
 ## Tech Stack
 
 | Dependency | Purpose |
-|---|---|
+| --- | --- |
 | `aiohttp` | Async HTTP for Serper, Brave, and Zuhal API calls |
 | `aiosqlite` | Async SQLite writes from both workers |
 | `aiodns` | Async DNS resolution for Phase 1 probing |
@@ -236,7 +323,7 @@ The full architecture decision record lives in `PIPELINE_ARCHITECTURE.md`. Key d
 
 ## Repository Structure
 
-```
+```text
 us-z-2/
 ├── pipeline/
 │   ├── __main__.py          # Entry point — launches both workers via asyncio.gather
