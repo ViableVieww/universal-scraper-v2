@@ -227,3 +227,5 @@ iterations/
 
 # Context
 .claude/
+engine/
+*.gz
