@@ -597,13 +597,12 @@ def main():
     }
 
     run_start = time.time()
-    offset = 0
 
     while True:
         record_ids = [
             r[0] for r in conn.execute(
-                "SELECT id FROM records WHERE status='pending_validation' LIMIT ? OFFSET ?",
-                (CHUNK_SIZE, offset),
+                "SELECT id FROM records WHERE status='pending_validation' LIMIT ?",
+                (CHUNK_SIZE,),
             ).fetchall()
         ]
         if not record_ids:
@@ -611,7 +610,7 @@ def main():
 
         stats["chunks"] += 1
         chunk_num = stats["chunks"]
-        log.info("--- Chunk %d | records %d–%d ---", chunk_num, offset + 1, offset + len(record_ids))
+        log.info("--- Chunk %d (%d records) ---", chunk_num, len(record_ids))
 
         try:
             process_chunk(conn, client, record_ids, stats)
@@ -642,7 +641,6 @@ def main():
             rate,
         )
 
-        offset += CHUNK_SIZE
 
     # Step 6: write CSV
     csv_rows = write_csv(conn, args.out)
