@@ -5,6 +5,7 @@ import json
 import logging
 
 import aiosqlite
+from fuzzywuzzy import fuzz
 
 from pipeline.config import PipelineConfig
 from pipeline.constants import CONSUMER_POLL_EMPTY_BACKOFF_THRESHOLD, CONSUMER_POLL_MAX_INTERVAL_SECONDS
@@ -137,13 +138,20 @@ class ConsumerWorker:
                 last_verdict = result.verdict
 
                 if result.verdict in ("valid", "accept-all"):
+                    score = compute_confidence_score(
+                        email=email,
+                        candidate_domain=row["candidate_domain"],
+                        strategy=row["strategy"] or "without",
+                        verdict=result.verdict,
+                        agent_name=row["agent_name"] or "",
+                    )
                     await db.update_record_status(
                         self.conn,
                         unique_id,
                         "validated",
                         candidate_email=email,
                         zuhal_status=result.verdict,
-                        zuhal_score=result.score,
+                        zuhal_score=score,
                     )
                     logger.info("Validated: %s -> %s (%s)", unique_id, email, result.verdict)
                     return
@@ -164,4 +172,77 @@ class ConsumerWorker:
                 zuhal_status=last_verdict,
             )
             logger.debug("All candidates failed for %s (last verdict: %s)", unique_id, last_verdict)
+
+
+_GENERIC_PREFIXES: frozenset[str] = frozenset({
+    "info", "contact", "hello", "admin",
+    "support", "sales", "help",
+})
+
+
+def _name_matches_email(local: str, agent_name: str) -> bool:
+    """True if the email local part fuzzy-matches the agent name (≥75)."""
+    parts = agent_name.strip().lower().split()
+    first = parts[0] if parts else ""
+    last = parts[-1] if len(parts) > 1 else ""
+    variants = [v for v in [
+        f"{first}{last}",
+        f"{first}.{last}",
+        f"{first}_{last}",
+        f"{first[0]}{last}" if first else "",
+        first,
+        last,
+    ] if v]
+    return bool(variants) and max(fuzz.ratio(local.lower(), v) for v in variants) >= 75
+
+
+def compute_confidence_score(
+    email: str,
+    candidate_domain: str | None,
+    strategy: str,
+    verdict: str,
+    agent_name: str = "",
+) -> int:
+    """Compute additive confidence score for a validated email.
+
+    With strategy  (max 4): domain match, name match, not generic, not catch-all
+    Without strategy (max 3): domain match, IS generic, not catch-all
+    """
+    local, _, domain = email.partition("@")
+    score = 0
+
+    # +1 domain fuzzy-matches candidate domain (≥85)
+    if candidate_domain:
+        d_norm = domain.rsplit(".", 1)[0].replace("-", "") if "." in domain else domain
+        c_norm = candidate_domain.rsplit(".", 1)[0].replace("-", "") if "." in candidate_domain else candidate_domain
+        if fuzz.ratio(d_norm, c_norm) >= 85:
+            score += 1
+
+    if strategy == "with":
+        # +1 local part fuzzy-matches agent name
+        if agent_name and _name_matches_email(local, agent_name):
+            score += 1
+        # +1 local part is NOT a generic prefix
+        if local.lower() not in _GENERIC_PREFIXES:
+            score += 1
+        # +1 not catch-all
+        if verdict == "valid":
+            score += 1
+    else:
+        # +1 local part IS a known generic prefix
+        if local.lower() in _GENERIC_PREFIXES:
+            score += 1
+        # +1 not catch-all
+        if verdict == "valid":
+            score += 1
+
+    return score
+
+
+def confidence_tier(score: int) -> str:
+    if score >= 3:
+        return "high"
+    if score == 2:
+        return "medium"
+    return "low"
 
