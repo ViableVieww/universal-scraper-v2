@@ -13,7 +13,7 @@ import aiohttp
 
 from pipeline.cli import parse_args
 from pipeline.config import PipelineConfig
-from pipeline.consumer import ConsumerWorker
+from pipeline.consumer import ConsumerWorker, confidence_tier
 from pipeline.producer import ProducerWorker
 from pipeline.utils.cost_tracker import CostTracker
 from pipeline.utils.logger import setup_logging, get_logger
@@ -216,13 +216,14 @@ async def _write_outputs(conn, config: PipelineConfig) -> None:
             writer = csv.writer(f)
             writer.writerow([
                 "unique_id", "business_name", "agent_name", "state",
-                "email", "zuhal_status", "zuhal_score",
+                "email", "zuhal_status", "confidence_tier",
             ])
             for row in rows:
-                writer.writerow([row[k] for k in [
-                    "unique_id", "business_name", "agent_name", "state",
-                    "candidate_email", "zuhal_status", "zuhal_score",
-                ]])
+                writer.writerow([
+                    row["unique_id"], row["business_name"], row["agent_name"],
+                    row["state"], row["candidate_email"], row["zuhal_status"],
+                    confidence_tier(int(row["zuhal_score"] or 0)),
+                ])
         logger.info("Wrote %d validated emails to %s", len(rows), csv_path)
 
     # results.jsonl
